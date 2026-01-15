@@ -19,6 +19,8 @@ constexpr int BUF_SIZE = 1024;
 atomic<bool> stop{false};
 int clientSocket = -1;
 
+pollfd pfd[2];
+
 void set_non_blocking(int socket)
 {
     int flags = fcntl(socket, F_GETFL, 0);
@@ -36,8 +38,8 @@ void set_non_blocking(int socket)
     }
 }
 
-
 void handle_sigint(int) {
+    cout << "\nSIGINT received, shutting down client...\n";
     stop.store(true);   // signal-safe
 }
 
@@ -74,22 +76,30 @@ int main() {
     freeaddrinfo(serverAddress);
 
     set_non_blocking(clientSocket);
-    // Receive thread
-    thread recvThread([&]() {
+
+    cout << "Connected to server " << serverIp << ":" << PORT << "\n";
+
+    // Client thread handling server messages and user input
+    thread ClientThread([&]() {
         char buffer[BUF_SIZE];
 
         while (!stop.load()) {
-            pollfd pfd{};
-            pfd.fd = clientSocket;
-            pfd.events = POLLIN;
-            int ready = poll(&pfd, 1, 200); // 200ms timeout
+            pfd[0].fd = clientSocket;
+            pfd[0].events = POLLIN;
+
+            pfd[1].fd = STDIN_FILENO;
+            pfd[1].events = POLLIN;
+
+            int ready = poll(pfd, 2, 200); // 200ms timeout
             if (ready < 0) {
                 if (errno == EINTR)
                     continue;
                 perror("poll");
                 break;
             }
-            if(pfd.revents & POLLIN) {
+
+            // Check for incoming data from server
+            if(pfd[0].revents & POLLIN) {
                  ssize_t n = recv(clientSocket, buffer, BUF_SIZE - 1, 0);
                 if (n <= 0) {
                     if (errno == EAGAIN || errno == EWOULDBLOCK) {
@@ -110,25 +120,9 @@ int main() {
 
                 cout << "Server: " << buffer << endl;
             }
-        }
-    });
 
-    // Send thread
-    thread sendThread([&]() {
-        char buffer[BUF_SIZE];
-
-        while (!stop.load()) {
-            pollfd pfd{};
-            pfd.fd = STDIN_FILENO;
-            pfd.events = POLLIN;
-            int ready = poll(&pfd, 1, 200); // 200ms
-            if (ready < 0) {
-                if (errno == EINTR)
-                    continue;
-                perror("poll");
-                break;
-            }
-            if(pfd.revents & POLLIN) {
+            // Check for user input
+            if(pfd[1].revents & POLLIN) {
                 cin.getline(buffer, BUF_SIZE);
                 
                 if (strlen(buffer) == 0)
@@ -142,9 +136,7 @@ int main() {
         }
     });
 
-    // ---- Controlled shutdown (single place) ----
-    while (!stop.load())
-        this_thread::sleep_for(chrono::milliseconds(100));
+    ClientThread.join();
 
     //Notify server about shutdown
     send(clientSocket, "#", 1, 0);
@@ -152,8 +144,5 @@ int main() {
     shutdown(clientSocket, SHUT_RDWR); // wake recv/send
     close(clientSocket);               // release fd
 
-    recvThread.join();
-    sendThread.join();
-
-    cout << "Client leaved the chat.\n";
+    cout << "Client left the chat.\n";
 }

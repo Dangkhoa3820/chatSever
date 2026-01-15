@@ -13,6 +13,8 @@
 #include <fcntl.h>
 #include <poll.h>
 
+#define MAX_CONNECTION 100
+
 using namespace std;
 
 constexpr int PORT = 1500;
@@ -23,9 +25,9 @@ int serverSocket = -1;
 
 mutex mtx;
 vector<int> clientSockets;
-vector<thread> clientThreads;
 
-struct pollfd fds[2];
+struct pollfd clientFds[MAX_CONNECTION + 1];
+int nfds = 0;
 
 void set_non_blocking(int socket)
 {
@@ -48,7 +50,7 @@ void handle_sigint(int)
 {
     cout << "\nSIGINT received, shutting down server...\n";
     stop.store(true);
-    //shutdown(serverSocket, SHUT_RDWR);
+    // shutdown(serverSocket, SHUT_RDWR);
 }
 
 void removeClient(int fd)
@@ -59,50 +61,105 @@ void removeClient(int fd)
         clientSockets.end());
 }
 
-void clientReceiveLoop(int fd)
+void cleanupClient(int slot)
 {
-    char buffer[BUF_SIZE];
-    pollfd pfd{};
-    pfd.fd = fd;
-    pfd.events = POLLIN;
+    int fd = clientFds[slot].fd;
 
-    while (!stop.load())
+    removeClient(fd);
+    close(fd);
+
+    clientFds[slot].fd = -1;
+    clientFds[slot].revents = 0;
+    --nfds;
+}
+
+void handleNewConnection(int serverSocket)
+{
+    sockaddr_in client_addr{};
+    socklen_t len = sizeof(client_addr);
+    
+    int client_fd = accept(serverSocket, (sockaddr*)&client_addr, &len);
+    if (client_fd < 0)
     {
-        int ready = poll(&pfd, 1, 200); // 200ms timeout
-        if (ready < 0) {
-            if (errno == EINTR)
-                continue;
-            perror("poll");
+        if (errno == EAGAIN || errno == EWOULDBLOCK)
+            return; // no more pending connections
+        if (errno == EINTR)
+            return;
+        perror("accept");
+        return;
+    }
+
+    // Find empty slot for new client
+    int slot = -1;
+    for (int i = 1; i <= MAX_CONNECTION; i++)
+    {
+        if (clientFds[i].fd == -1)
+        {
+            slot = i;
             break;
         }
+    }
 
-        if (ready == 0) // timeout
-            continue;
+    if (slot == -1)
+    {
+        cout << "Max clients reached, rejecting connection\n";
+        close(client_fd);
+        return;
+    }
 
-        if (pfd.revents & POLLIN) {
-            ssize_t n = recv(fd, buffer, BUF_SIZE - 1, 0);
-            if (n <= 0) {
-                removeClient(fd);
-                close(fd);
-                break; // connection closed or error
-            }
+    // Add client to poll array
+    set_non_blocking(client_fd);
+    clientFds[slot].fd = client_fd;
+    clientFds[slot].events = POLLIN | POLLRDHUP;
+    nfds++;
 
-            buffer[n] = '\0';
+    lock_guard<mutex> lock(mtx);
+    clientSockets.push_back(client_fd);
 
-            if (buffer[0] == '#') {
-                cout << "Client " << fd << " disconnected.\n";
-                removeClient(fd);
-                close(fd);
-                break;
-            }
+    char ip[INET_ADDRSTRLEN];
+    inet_ntop(AF_INET, &client_addr.sin_addr, ip, sizeof(ip));
+    cout << "> Client " << client_fd << " connected from " << ip 
+         << " (slot " << slot << ", total: " << nfds << ")\n";
+}
 
-            lock_guard<mutex> lock(mtx);
-            cout << "Client " << fd << ": " << buffer << endl;
+void handleClientData(int slot)
+{
+    char buffer[BUF_SIZE];
+    int clientFd = clientFds[slot].fd;
+    
+    ssize_t n = recv(clientFd, buffer, BUF_SIZE - 1, 0);
+    if (n > 0)
+    {
+        buffer[n] = '\0';
+
+        // Check for disconnect message
+        if (buffer[0] == '#')
+        {
+            cleanupClient(slot);
+            cout << "Client " << clientFd << " sent disconnect (slot " << slot << ") (total: " << nfds << ")\n";
+            return;
         }
 
-        if (pfd.revents & (POLLERR | POLLHUP)) {
-            break; // connection error
-        }
+        cout << "Client " << clientFd << ": " << buffer << "\n";
+    }
+    else if (n == 0)
+    {
+        // Connection closed by client
+        cleanupClient(slot);
+        cout << "Client " << clientFd << " closed connection (slot " << slot << ") (total: " << nfds << ")\n";
+    }
+    else
+    {
+        // n < 0: error or would-block
+        if (errno == EAGAIN || errno == EWOULDBLOCK)
+            return; // no more data available right now
+        if (errno == EINTR)
+            return; // interrupted, try again
+        
+        // Real error
+        perror("recv");
+        cleanupClient(slot);
+        cout << "Client " << clientFd << " error on recv (slot " << slot << ") (total: " << nfds << ")\n";
     }
 }
 
@@ -110,6 +167,7 @@ int main()
 {
     signal(SIGINT, handle_sigint);
 
+    //Setup server socket
     sockaddr_in server_addr{};
     server_addr.sin_family = AF_INET;
     server_addr.sin_addr.s_addr = htonl(INADDR_ANY);
@@ -133,7 +191,7 @@ int main()
         return 1;
     }
 
-    if (listen(serverSocket, 8) < 0)
+    if (listen(serverSocket, 128) < 0)
     {
         perror("listen");
         return 1;
@@ -141,45 +199,44 @@ int main()
 
     cout << "Server listening on port " << PORT << "...\n";
 
-    // Accept thread
+    for (int i = 1; i < MAX_CONNECTION + 1; i++)
+    {
+        clientFds[i].fd = -1; // reset
+    }
+
+    // Accept thread - handles incoming connections and client data
     thread acceptThread([&]()
-                        {
-        while (!stop.load()) {
-            sockaddr_in client_addr{};
-            socklen_t len = sizeof(client_addr);
+    {
+        while (!stop.load())
+        {
+            clientFds[0].fd = serverSocket;
+            clientFds[0].events = POLLIN;
 
-            fds[0].fd = serverSocket;
-            fds[0].events = POLLIN;
-
-            int ready = poll(&fds[0], 1, 200); // 200ms timeout
-            if (ready < 0) {
+            int ready = poll(clientFds, 1 + MAX_CONNECTION, 1000);
+            if (ready < 0)
+            {
                 if (errno == EINTR)
                     continue;
                 perror("poll");
                 break;
             }
-
-            if(fds[0].revents & POLLIN) {
-
-                int fd = accept(serverSocket, (sockaddr*)&client_addr, &len);
-                if (fd < 0) {
-                    this_thread::sleep_for(chrono::milliseconds(100));
-                    continue;
-                }
-
-                set_non_blocking(fd);
-
-                char ip[INET_ADDRSTRLEN];
-                inet_ntop(AF_INET, &client_addr.sin_addr, ip, sizeof(ip));
-
-                {
-                    lock_guard<mutex> lock(mtx);
-                    clientSockets.push_back(fd);
-                    clientThreads.emplace_back(clientReceiveLoop, fd);
-                }
-                cout << "> Client " << fd << " connected from " << ip << "\n";
+            
+            // Check for new connections
+            if (clientFds[0].revents & POLLIN)
+            {
+                handleNewConnection(serverSocket);
             }
-        } });
+            
+            // Check all client sockets for incoming data
+            for (int i = 1; i <= MAX_CONNECTION; i++)
+            {
+                if (clientFds[i].fd != -1 && (clientFds[i].revents & POLLIN))
+                {
+                    handleClientData(i);
+                }
+            }
+        }
+    });
 
     // Server input → broadcast
     thread sendThread([&]()
@@ -187,9 +244,10 @@ int main()
         char buffer[BUF_SIZE];
 
         while (!stop.load()) {
-            fds[1].fd = STDIN_FILENO;
-            fds[1].events = POLLIN;
-            int ready = poll(&fds[1], 1, 200); // 200ms timeout
+            struct pollfd fds;
+            fds.fd = STDIN_FILENO;
+            fds.events = POLLIN;
+            int ready = poll(&fds, 1, 200); // 200ms timeout
             if (ready < 0) {
                 if (errno == EINTR)
                     continue;
@@ -197,7 +255,7 @@ int main()
                 break;
             }
             
-            if(fds[1].revents & POLLIN) {
+            if(fds.revents & POLLIN) {
                 cin.getline(buffer, BUF_SIZE);
                 if(strlen(buffer) == 0)
                     continue;
@@ -206,20 +264,15 @@ int main()
                     send(fd, buffer, strlen(buffer), 0);
                 }
             }
-        }
-    });
+        } });
 
     acceptThread.join();
-
-    for (auto &t : clientThreads)
-        if (t.joinable())
-            t.join();
-
     sendThread.join();
 
     // Notify clients about shutdown
     lock_guard<mutex> lock(mtx);
-    for (int fd : clientSockets) {
+    for (int fd : clientSockets)
+    {
         send(fd, "#", 1, 0);
         close(fd);
     }
