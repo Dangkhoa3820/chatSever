@@ -12,6 +12,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/epoll.h>
+#include <unordered_map>
 
 using namespace std;
 
@@ -24,6 +25,7 @@ int serverSocket = -1;
 
 mutex mtx;
 vector<int> clientSockets;
+unordered_map<int, string> clientNames;
 
 struct epoll_event ev, events[MAX_CONNECTION + 2];
 int epollfd;
@@ -58,11 +60,14 @@ void removeClient(int fd)
     clientSockets.erase(
         remove(clientSockets.begin(), clientSockets.end(), fd),
         clientSockets.end());
+    
+    clientNames.erase(fd);
 }
 
 void cleanupClient(int fd)
 {
     removeClient(fd);
+    clientNames.erase(fd);
     close(fd);
 }
 
@@ -95,8 +100,21 @@ void handleNewConnection(int serverSocket)
 
     char ip[INET_ADDRSTRLEN];
     inet_ntop(AF_INET, &client_addr.sin_addr, ip, sizeof(ip));
-    cout << "> Client " << client_fd << " connected from " << ip 
-         << ", total: " << clientSockets.size() << ")\n";
+}
+
+void broadcastMessage(int clientFd, const char* buffer)
+{
+    lock_guard<mutex> lock(mtx);
+    for (int fd : clientSockets) {
+        if(fd != clientFd) {
+            string msg = clientNames[clientFd] + string(buffer);
+            send(fd, msg.c_str(), msg.length(), 0);
+        } else {
+            // Optionally, send to sender as well
+            string msg = "You" + string(buffer);
+            send(fd, msg.c_str(), msg.length(), 0);
+        }
+    }
 }
 
 void handleClientData(int clientFd)
@@ -110,18 +128,38 @@ void handleClientData(int clientFd)
         // Check for disconnect message
         if (buffer[0] == '#')
         {
+            cout << "\nClient " << clientFd << "[" << clientNames[clientFd] << "]" << " sent disconnect (total: " << clientSockets.size() << ")\n";
+            string leaveMsg = " has left the chat.\n";
+            broadcastMessage(clientFd, leaveMsg.c_str());
             cleanupClient(clientFd);
-            cout << "Client " << clientFd << " sent disconnect (total: " << clientSockets.size() << ")\n";
             return;
         }
 
-        cout << "Client " << clientFd << ": " << buffer << "\n";
+        if(strncmp(buffer, "JOIN ", 5) == 0)
+        {
+            string name(buffer + 5);
+            name.erase(remove(name.begin(), name.end(), '\n'), name.end());
+            {
+                lock_guard<mutex> lock(mtx);
+                clientNames[clientFd] = name;
+            }
+            string joinMsg = " has joined the chat.\n";
+            broadcastMessage(clientFd, joinMsg.c_str());
+            cout << "\nClient " << clientFd << "[" << name <<  "]: " << "connected (total: " << clientSockets.size() << ")\n";
+            return;
+        }
+
+        cout << "\nClient " << clientFd << "[" << clientNames[clientFd] << "]" << " message: " << buffer << "\n";
+        string msg = ": " + string(buffer);
+        broadcastMessage(clientFd, msg.c_str());
     }
     else if (n == 0)
     {
         // Connection closed by client
+        string leaveMsg = " has left the chat.\n";
+        broadcastMessage(clientFd, leaveMsg.c_str());
+        cout << "\nClient " << clientFd << "[" << clientNames[clientFd] << "]" << " closed connection (total: " << clientSockets.size() << ")\n";
         cleanupClient(clientFd);
-        cout << "Client " << clientFd << " closed connection (total: " << clientSockets.size() << ")\n";
     }
     else
     {
@@ -133,8 +171,10 @@ void handleClientData(int clientFd)
         
         // Real error
         perror("recv");
+        string leaveMsg = " has left the chat.\n";
+        broadcastMessage(clientFd, leaveMsg.c_str());
+        cout << "\nClient " << clientFd << "[" << clientNames[clientFd] << "]" << " error on recv (total: " << clientSockets.size() << ")\n";
         cleanupClient(clientFd);
-        cout << "Client " << clientFd << " error on recv (total: " << clientSockets.size() << ")\n";
     }
 }
 
@@ -146,6 +186,8 @@ void handle_send_data()
     if(strlen(buffer) == 0)
         return;
     lock_guard<mutex> lock(mtx);
+    string msg = "[SERVER]: " + string(buffer) + "\n";
+    strcpy(buffer, msg.c_str());
     for (int fd : clientSockets) {
         send(fd, buffer, strlen(buffer), 0);
     }

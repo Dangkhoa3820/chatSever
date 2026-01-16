@@ -10,17 +10,27 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/epoll.h>
+#include <termios.h>
+#include <vector>
+#include <deque>
 
 using namespace std;
 
 constexpr int PORT = 1500;
 constexpr int BUF_SIZE = 1024;
+constexpr int MAX_MESSAGES = 100;
 
 atomic<bool> stop{false};
 int clientSocket = -1;
 
 epoll_event ev, events[2];
 int epollfd;
+
+mutex displayMutex;
+deque<string> messageHistory;
+string currentInput;
+
+termios originalTermios;
 
 void set_non_blocking(int socket)
 {
@@ -39,10 +49,57 @@ void set_non_blocking(int socket)
     }
 }
 
+void enableRawMode()
+{
+    tcgetattr(STDIN_FILENO, &originalTermios);
+    termios raw = originalTermios;
+    raw.c_lflag &= ~(ICANON | ECHO);
+    tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw);
+}
+
+void disableRawMode()
+{
+    tcsetattr(STDIN_FILENO, TCSAFLUSH, &originalTermios);
+}
+
+void clearScreen()
+{
+    cout << "\033[2J\033[H" << flush;
+}
+
+void redrawScreen()
+{
+    lock_guard<mutex> lock(displayMutex);
+    
+    // Clear screen and move cursor to top
+    cout << "\033[2J\033[H";
+    
+    // Display message history from top
+    for (const auto& msg : messageHistory)
+    {
+        cout << msg << "\n";
+    }
+    
+    // Move to bottom of screen (save cursor position)
+    cout << "\033[999;1H";
+    
+    // Draw input line at bottom
+    cout << "\033[K> " << currentInput << flush;
+}
+
+void addMessage(const string& msg)
+{
+    lock_guard<mutex> lock(displayMutex);
+    messageHistory.push_back(msg);
+    if (messageHistory.size() > MAX_MESSAGES)
+        messageHistory.pop_front();
+}
+
 void handle_sigint(int)
 {
     cout << "\nSIGINT received, shutting down client...\n";
     stop.store(true); // signal-safe
+    disableRawMode();
 }
 
 int main()
@@ -82,6 +139,12 @@ int main()
 
     cout << "Connected to server " << serverIp << ":" << PORT << "\n";
 
+    string username;
+    cout << "Enter your username: ";
+    getline(cin, username);
+    string join = "JOIN " + username + "\n";
+    send(clientSocket, join.c_str(), join.size(), 0);
+
     epollfd = epoll_create1(0);
     if (epollfd == -1)
     {
@@ -104,6 +167,11 @@ int main()
         perror("epoll_ctl: STDIN_FILENO");
         return 1;
     }
+
+    // Enable raw mode and setup display
+    enableRawMode();
+    clearScreen();
+    redrawScreen();
 
     while (!stop.load())
     {
@@ -137,36 +205,66 @@ int main()
 
                 if (buffer[0] == '#')
                 {
-                    cout << "Server closed connection.\n";
+                    addMessage("Server closed connection.");
+                    redrawScreen();
                     stop.store(true);
                     break;
                 }
 
-                cout << "Server: " << buffer << endl;
+                addMessage(string(buffer));
+                redrawScreen();
             }
             else if (events[i].data.fd == STDIN_FILENO)
             {
-                char buffer[BUF_SIZE];
-                cin.getline(buffer, BUF_SIZE);
-
-                if (strlen(buffer) == 0)
-                    continue;
-
-                if (send(clientSocket, buffer, strlen(buffer), 0) <= 0)
+                char c;
+                if (read(STDIN_FILENO, &c, 1) == 1)
                 {
-                    cout << "Failed to send data to server.\n";
-                    stop.store(true);
-                    break;
+                    if (c == '\n')
+                    {
+                        // Enter pressed - send message
+                        if (!currentInput.empty())
+                        {
+                            string msg = currentInput + "\n";
+                            if (send(clientSocket, msg.c_str(), msg.length(), 0) <= 0)
+                            {
+                                addMessage("Failed to send data to server.");
+                                redrawScreen();
+                                stop.store(true);
+                                break;
+                            }
+                            currentInput.clear();
+                            redrawScreen();
+                        }
+                    }
+                    else if (c == 127 || c == 8)
+                    {
+                        // Backspace
+                        if (!currentInput.empty())
+                        {
+                            currentInput.pop_back();
+                            redrawScreen();
+                        }
+                    }
+                    else if (c >= 32 && c <= 126)
+                    {
+                        // Printable character
+                        currentInput += c;
+                        redrawScreen();
+                    }
                 }
             }
         }
     }
 
+    // Cleanup
+    clearScreen();
+    disableRawMode();
+    
     // Notify server about shutdown
     send(clientSocket, "#", 1, 0);
 
     shutdown(clientSocket, SHUT_RDWR); // wake recv/send
     close(clientSocket);               // release fd
 
-    cout << "Client left the chat.\n";
+    cout << "You left the chat.\n";
 }
