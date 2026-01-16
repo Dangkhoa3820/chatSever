@@ -1,8 +1,8 @@
-# Simple Chat Server and Client Program
+# 💬 <span style="color: #2E86DE">Simple Chat Server and Client Program</span>
 
 This project implements a TCP-based chat server and client application using four different I/O models in C++. Each implementation demonstrates different approaches to handling multiple concurrent client connections.
 
-## Project Structure
+## 📁 <span style="color: #00D2D3">Project Structure</span>
 
 ```
 Simple-Server-and-Chat-Program/
@@ -15,14 +15,14 @@ Simple-Server-and-Chat-Program/
 
 ---
 
-## 1. Multithread Implementation
+## 🧵 <span style="color: #00D2D3">1. Multithread Implementation</span>
 
 **Directory:** `Chat-Program-Multithread/`
 
-### Overview
+### 📖 <span style="color: #F39C12">Overview</span>
 The multithread approach spawns a dedicated thread for each connected client. Each thread blocks on `recv()` waiting for data from its assigned client.
 
-### Technical Details
+### 🔍 <span style="color: #F39C12">Technical Details</span>
 
 #### Key Technologies:
 - **Blocking I/O**: Uses standard blocking socket operations
@@ -58,14 +58,14 @@ Best for applications with moderate numbers of clients (< 100) where simplicity 
 
 ---
 
-## 2. Non-Blocking I/O Implementation
+## 🔄 <span style="color: #00D2D3">2. Non-Blocking I/O Implementation</span>
 
 **Directory:** `Chat-Program-Non-Blocking/`
 
-### Overview
+### 📖 <span style="color: #F39C12">Overview</span>
 Uses non-blocking sockets with threads, where each thread handles one client but doesn't block on I/O operations. Instead, it polls the socket status.
 
-### Technical Details
+### 🔍 <span style="color: #F39C12">Technical Details</span>
 
 #### Key Technologies:
 - **Non-blocking I/O**: `fcntl()` with `O_NONBLOCK` flag
@@ -108,14 +108,14 @@ Useful when you need timeout capabilities or want to perform other tasks while w
 
 ---
 
-## 3. Poll Implementation
+## 📊 <span style="color: #00D2D3">3. Poll Implementation</span>
 
 **Directory:** `Chat-Program-Polling/`
 
-### Overview
+### 📖 <span style="color: #F39C12">Overview</span>
 Uses the `poll()` system call for I/O multiplexing. A single thread monitors multiple file descriptors simultaneously, allowing one thread to handle many clients efficiently.
 
-### Technical Details
+### 🔍 <span style="color: #F39C12">Technical Details</span>
 
 #### Key Technologies:
 - **`poll()` system call**: POSIX I/O multiplexing interface
@@ -155,14 +155,14 @@ Good for applications with dozens to hundreds of concurrent clients where portab
 
 ---
 
-## 4. Epoll Implementation
+## ⚡ <span style="color: #00D2D3">4. Epoll Implementation</span>
 
 **Directory:** `Chat-Program-Epoll/`
 
-### Overview
+### 📖 <span style="color: #F39C12">Overview</span>
 Uses the `epoll()` system call, which is Linux's most efficient I/O multiplexing mechanism. Provides O(1) performance for monitoring large numbers of file descriptors.
 
-### Technical Details
+### 🔍 <span style="color: #F39C12">Technical Details</span>
 
 #### Key Technologies:
 - **`epoll_create1()`**: Creates epoll instance
@@ -223,21 +223,21 @@ Best for high-performance Linux servers handling thousands of concurrent connect
 
 ---
 
-## Common Features Across All Implementations
+## ✨ <span style="color: #00D2D3">Common Features Across All Implementations</span>
 
-### Protocol
+### 📡 <span style="color: #F39C12">Protocol</span>
 All implementations support:
 - **JOIN handshake**: `JOIN <username>\n` to register username
 - **Chat messages**: Any text followed by newline
 - **Disconnect**: `#` to gracefully disconnect
 - **Server broadcast**: Messages from server to all clients
 
-### Signal Handling
+### 🛑 <span style="color: #F39C12">Signal Handling</span>
 - **SIGINT (Ctrl+C)**: Graceful shutdown
 - Notifies all clients before terminating
 - Cleans up resources properly
 
-### Client Features
+### 👤 <span style="color: #F39C12">Client Features</span>
 - Connect to server by IP address
 - Username registration
 - Send messages to all connected clients
@@ -246,9 +246,9 @@ All implementations support:
 
 ---
 
-## Building and Running
+## 🔨 <span style="color: #00D2D3">Building and Running</span>
 
-### Compilation
+### ⚙️ <span style="color: #F39C12">Compilation</span>
 ```bash
 # Navigate to any implementation directory
 cd Chat-Program-Multithread/  # or Non-Blocking, Polling, Epoll
@@ -260,7 +260,7 @@ g++ -std=c++11 -pthread server.cpp -o server
 g++ -std=c++11 -pthread client.cpp -o client
 ```
 
-### Running
+### ▶️ <span style="color: #F39C12">Running</span>
 ```bash
 # Terminal 1: Start server
 ./server
@@ -280,7 +280,7 @@ g++ -std=c++11 -pthread client.cpp -o client
 
 ---
 
-## Performance Comparison
+## 📈 <span style="color: #00D2D3">Performance Comparison</span>
 
 | Implementation | Scalability | CPU Usage | Memory Usage | Complexity | Portability |
 |---------------|-------------|-----------|--------------|------------|-------------|
@@ -291,7 +291,7 @@ g++ -std=c++11 -pthread client.cpp -o client
 
 ---
 
-## Learning Objectives
+## 🎓 <span style="color: #00D2D3">Learning Objectives</span>
 
 Each implementation teaches different concepts:
 
@@ -302,9 +302,9 @@ Each implementation teaches different concepts:
 
 ---
 
-## Technical Notes
+## 🔧 <span style="color: #00D2D3">Technical Notes</span>
 
-### Socket Programming Basics
+### 🔌 <span style="color: #F39C12">Socket Programming Basics</span>
 - `socket()`: Create endpoint for communication
 - `bind()`: Associate socket with address
 - `listen()`: Mark socket as passive (server)
@@ -313,19 +313,19 @@ Each implementation teaches different concepts:
 - `send()`/`recv()`: Transfer data
 - `close()`: Close socket
 
-### Important Socket Options
+### ⚙️ <span style="color: #F39C12">Important Socket Options</span>
 - `SO_REUSEADDR`: Allow quick restart of server
 - `O_NONBLOCK`: Non-blocking mode
 - `SHUT_RDWR`: Shutdown both read and write
 
-### Error Codes
+### ⚠️ <span style="color: #F39C12">Error Codes</span>
 - `EAGAIN`/`EWOULDBLOCK`: No data available (non-blocking)
 - `EINTR`: System call interrupted by signal
 - `EPIPE`: Broken pipe (connection closed)
 
 ---
 
-## Future Enhancements
+## 🚀 <span style="color: #00D2D3">Future Enhancements</span>
 
 Possible improvements:
 - Private messaging between users
@@ -340,10 +340,10 @@ Possible improvements:
 
 ---
 
-## License
+## 📜 <span style="color: #00D2D3">License</span>
 
 This is an educational project demonstrating different I/O models in network programming.
 
-## Author
+## 👨‍💻 <span style="color: #00D2D3">Author</span>
 
 Chat server implementations showcasing various concurrency and I/O models in C++.
